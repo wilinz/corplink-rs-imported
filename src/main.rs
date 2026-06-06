@@ -18,11 +18,12 @@ use dns::DNSManager;
 
 use std::env;
 use std::process::exit;
+use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 
 use client::Client;
-use config::{Config, WgConf};
+use config::Config;
 
 fn print_usage_and_exit(name: &str, conf: &str) {
     println!("usage:\n\t{} {}", name, conf);
@@ -123,33 +124,50 @@ async fn run() -> Result<()> {
     let platform = conf.platform.clone();
     let mut c = Client::new(conf).context("failed to initialize client")?;
     let mut logout_retry = true;
-    let wg_conf: Option<WgConf>;
 
-    loop {
+    // Retry login/connect in-process with exponential backoff instead of
+    // exiting on failure. Exiting would let the container's restart policy
+    // hammer the server — rate limiting ("请稍等几分钟后再试"), terminal-count
+    // limits ("超过终端登录数量限制"), or transient timeouts — which only makes
+    // it worse. Backing off in-process keeps one process alive and polite.
+    const BACKOFF_MIN_SECS: u64 = 5;
+    const BACKOFF_MAX_SECS: u64 = 300;
+    let mut backoff = BACKOFF_MIN_SECS;
+
+    let wg_conf = loop {
         if c.need_login() {
             log::info!("not login yet, try to login");
-            c.login().await.context("login failed")?;
-            log::info!("login success");
+            match c.login().await {
+                Ok(_) => {
+                    log::info!("login success");
+                    backoff = BACKOFF_MIN_SECS;
+                }
+                Err(e) => {
+                    log::warn!("login failed: {:#}; retrying in {}s", e, backoff);
+                    tokio::time::sleep(Duration::from_secs(backoff)).await;
+                    backoff = (backoff * 2).min(BACKOFF_MAX_SECS);
+                    continue;
+                }
+            }
         }
         log::info!("try to connect");
         match c.connect_vpn().await {
-            Ok(conf) => {
-                wg_conf = Some(conf);
-                break;
-            }
+            Ok(conf) => break conf,
             Err(e) => {
+                // session expired mid-run: connect_vpn already reset the state,
+                // so re-login once immediately before falling back to backoff.
                 if logout_retry && e.to_string().contains("logout") {
-                    // e contains detail message, so just print it out
                     log::warn!("{}", e);
                     logout_retry = false;
                     continue;
-                } else {
-                    return Err(e);
                 }
+                log::warn!("failed to connect: {:#}; retrying in {}s", e, backoff);
+                tokio::time::sleep(Duration::from_secs(backoff)).await;
+                backoff = (backoff * 2).min(BACKOFF_MAX_SECS);
+                continue;
             }
-        };
-    }
-    let wg_conf = wg_conf.ok_or_else(|| anyhow!("wg conf missing after connect loop"))?;
+        }
+    };
     let protocol = wg_conf.protocol;
     let mut uapi = wg::UAPIClient { name: name.clone() };
     if let Some(listen) = &socks5_listen {
