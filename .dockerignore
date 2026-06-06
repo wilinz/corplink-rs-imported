@@ -1,0 +1,22 @@
+# build output (regenerated inside the image)
+target/
+libwg/libwg.a
+libwg/libwg.h
+
+# git metadata (not needed; libwg is built from the vendored submodule source)
+**/.git
+.gitignore
+
+# secrets / runtime state — never bake into an image
+config.json
+*cookies.json
+
+# personal notes / captures / release artifacts
+reverse/
+reverse-docs/
+har/
+release/
+*.zip
+.idea/
+.vscode/
+.DS_Store
