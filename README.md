@@ -232,6 +232,28 @@ curl --socks5-hostname user:pass@127.0.0.1:1080 https://intranet.example.com/
 
 此模式下 `interface_name`、`use_vpn_dns`、`auto_setup_routes` 等与系统网卡/路由相关的设置不生效。
 
+## Docker
+
+SOCKS5 / netstack 模式无需 TUN、无需特权，很适合放进容器：
+
+```sh
+# 1. 准备配置：把 config.json 放到 ./data/，并设置 "socks5_listen": "0.0.0.0:1080"
+mkdir -p data && cp config/config.json data/config.json && $EDITOR data/config.json
+
+# 2. 构建并启动（docker compose）
+docker compose up -d --build
+
+# 或手动构建
+./scripts/build-docker.sh                 # 生成 corplink-rs:local
+docker run --rm -p 1080:1080 -v "$PWD/data:/data" corplink-rs:local
+```
+
+- 容器以非特权用户运行，仅暴露 SOCKS5 端口（默认 1080）。
+- `./data` 需可写：登录态会写回 `config.json`，cookie 写到 `<interface_name>_cookies.json`。
+- 客户端指向 `socks5://<host>:1080`（设了 `socks5_username`/`socks5_password` 则带账号密码）。
+- 镜像不内置 `config.json`（含凭据），务必通过挂载卷提供。
+- 打 `v*` tag 会触发 `.github/workflows/docker.yml` 构建并推送镜像。
+
 # 原理和分析
 
 [飞连][1] 是基于 [wg-go][2] 魔改的企业级 VPN 产品

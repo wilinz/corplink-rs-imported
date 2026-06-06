@@ -1,0 +1,22 @@
+# Self-use corplink-rs in SOCKS5 / netstack mode (no TUN, no privileges).
+#
+#   1. put your config.json in ./data/  (set "socks5_listen": "0.0.0.0:1080")
+#   2. docker compose up -d --build
+#   3. point clients at socks5://<host>:1080
+#
+# The generated <interface_name>_cookies.json and the saved login state are
+# written back into ./data, so the volume must be writable.
+services:
+  corplink:
+    build: .
+    image: corplink-rs:local
+    container_name: corplink-rs
+    restart: unless-stopped
+    ports:
+      - "1080:1080"
+    volumes:
+      - ./data:/data
+    # config path inside the container (defaults to /data/config.json)
+    command: ["/data/config.json"]
+    environment:
+      - RUST_LOG=info
